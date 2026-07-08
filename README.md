@@ -12,6 +12,7 @@ cmd/seed/        seeds the database with 5 mock users + history
 internal/api/    HTTP handlers and request validation
 internal/db/     SQLite storage (users, devices, transactions)
 internal/rules/  scoring rules engine + stub GeoIP lookup
+dashboard/       Next.js demo dashboard (form + flagged-transactions table)
 ```
 
 Storage is SQLite via `modernc.org/sqlite` (pure Go — no CGO required).
@@ -24,14 +25,51 @@ Requires Go 1.22+.
 # 1. Seed the database (creates securepay.db with 5 mock users)
 go run ./cmd/seed
 
-# 2. Start the API on :8080
+# 2. Set the API key (see .env.example) — the server refuses to start without it
+export SECUREPAY_API_KEY=$(openssl rand -hex 32)
+
+# 3. Start the API on :8080
 go run ./cmd/server
 ```
 
 Flags: both commands accept `-db <path>` (default `securepay.db`); the server
 also accepts `-addr` (default `:8080`).
 
+### Authentication
+
+Every request must carry the key in an `X-API-Key` header; anything missing
+or wrong gets `401 {"error": "missing or invalid API key"}`. This is a single
+shared key suitable for an MVP demo — not per-merchant auth.
+
 Run the tests with `go test ./...`.
+
+### Dashboard
+
+A minimal Next.js dashboard lives in `dashboard/` — a form that submits to
+`POST /api/verify` (risk score, flag badges, color-coded recommendation) and
+a table of recent flagged transactions from `GET /api/flagged`, refreshed on
+load and after each submission.
+
+The browser never talks to the Go API directly and never sees the API key:
+the page calls the dashboard's own server-side route handlers
+(`app/api/verify` and `app/api/flagged`), which hold `SECUREPAY_API_KEY`
+server-side and proxy to the Go API with the `X-API-Key` header attached.
+The key is not in any client component or `NEXT_PUBLIC_` variable, so it
+never ships in a browser bundle.
+
+```sh
+cd dashboard
+npm install
+cp .env.local.example .env.local   # fill in the same key the Go API uses
+npm run dev                        # http://localhost:3000 (expects the API on :8080)
+```
+
+The API still allows CORS from `http://localhost:3000` only, handy for
+direct-from-browser experiments, though the dashboard no longer needs it.
+
+> **Local demo only.** Auth is a single shared API key with no rate limiting
+> or per-merchant identity — do not expose this pair on a public interface
+> as-is.
 
 ## API
 
@@ -64,6 +102,30 @@ baseline evolves from trusted activity only. Verifications that come back
 table (with their recommendation and flags) that never feeds the rules
 engine — a fraudster can't launder a risky device or location into the
 baseline by repeating the attempt.
+
+### GET /api/flagged
+
+Returns the 20 most recent flagged (review/block) verifications, newest
+first, for the dashboard's audit table:
+
+```sh
+curl -s localhost:8080/api/flagged -H "X-API-Key: $SECUREPAY_API_KEY"
+```
+
+```json
+[
+  {
+    "user_id": "alice-001",
+    "ip_address": "8.8.8.8",
+    "country": "US",
+    "device_fingerprint": "dev-stolen-laptop",
+    "amount": 400,
+    "recommendation": "review",
+    "flags": ["new_device", "unusual_amount"],
+    "created_at": "2026-07-08T17:11:37Z"
+  }
+]
+```
 
 ### Rules (v1)
 
@@ -102,6 +164,7 @@ Clean transaction — known device, home country, normal amount → **allow**:
 ```sh
 curl -s -X POST localhost:8080/api/verify \
   -H 'Content-Type: application/json' \
+  -H "X-API-Key: $SECUREPAY_API_KEY" \
   -d '{"user_id":"alice-001","ip_address":"8.8.8.8","device_fingerprint":"dev-alice-macbook","transaction_amount":55.00}'
 # {"risk_score":0,"flags":[],"recommendation":"allow"}
 ```
@@ -111,6 +174,7 @@ New device + unusual amount (30 + 25 = 55) → **review**:
 ```sh
 curl -s -X POST localhost:8080/api/verify \
   -H 'Content-Type: application/json' \
+  -H "X-API-Key: $SECUREPAY_API_KEY" \
   -d '{"user_id":"alice-001","ip_address":"8.8.8.8","device_fingerprint":"dev-stolen-laptop","transaction_amount":400.00}'
 # {"risk_score":55,"flags":["new_device","unusual_amount"],"recommendation":"review"}
 ```
@@ -120,6 +184,7 @@ Everything wrong at once — new device, foreign IP, huge amount (30 + 40 + 25 =
 ```sh
 curl -s -X POST localhost:8080/api/verify \
   -H 'Content-Type: application/json' \
+  -H "X-API-Key: $SECUREPAY_API_KEY" \
   -d '{"user_id":"bob-002","ip_address":"177.99.1.1","device_fingerprint":"dev-unknown","transaction_amount":5000.00}'
 # {"risk_score":95,"flags":["new_device","location_mismatch","unusual_amount"],"recommendation":"block"}
 ```
@@ -129,6 +194,7 @@ Known device but logging in from abroad (40) → **review**:
 ```sh
 curl -s -X POST localhost:8080/api/verify \
   -H 'Content-Type: application/json' \
+  -H "X-API-Key: $SECUREPAY_API_KEY" \
   -d '{"user_id":"carol-003","ip_address":"8.8.4.4","device_fingerprint":"dev-carol-iphone","transaction_amount":300.00}'
 # {"risk_score":40,"flags":["location_mismatch"],"recommendation":"review"}
 ```

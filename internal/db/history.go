@@ -89,14 +89,14 @@ func (s *Store) RecordTransaction(userID, ipAddress, country, fingerprint string
 // FlaggedTransaction is a review/block verification kept for audit and
 // investigation. It never feeds the rules engine's baseline.
 type FlaggedTransaction struct {
-	UserID            string
-	IPAddress         string
-	Country           string
-	DeviceFingerprint string
-	Amount            float64
-	Recommendation    string
-	Flags             []string
-	CreatedAt         time.Time
+	UserID            string    `json:"user_id"`
+	IPAddress         string    `json:"ip_address"`
+	Country           string    `json:"country"`
+	DeviceFingerprint string    `json:"device_fingerprint"`
+	Amount            float64   `json:"amount"`
+	Recommendation    string    `json:"recommendation"`
+	Flags             []string  `json:"flags"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 // RecordFlaggedTransaction persists a review/block verification into
@@ -118,11 +118,25 @@ func (s *Store) RecordFlaggedTransaction(userID, ipAddress, country, fingerprint
 
 // FlaggedTransactions returns the audit records for a user, oldest first.
 func (s *Store) FlaggedTransactions(userID string) ([]FlaggedTransaction, error) {
-	rows, err := s.db.Query(
+	return s.queryFlagged(
 		`SELECT user_id, ip_address, country, device_fingerprint, amount, recommendation, flags, created_at
 		 FROM flagged_transactions WHERE user_id = ? ORDER BY id`,
 		userID,
 	)
+}
+
+// RecentFlaggedTransactions returns the newest audit records across all
+// users, newest first, capped at limit.
+func (s *Store) RecentFlaggedTransactions(limit int) ([]FlaggedTransaction, error) {
+	return s.queryFlagged(
+		`SELECT user_id, ip_address, country, device_fingerprint, amount, recommendation, flags, created_at
+		 FROM flagged_transactions ORDER BY id DESC LIMIT ?`,
+		limit,
+	)
+}
+
+func (s *Store) queryFlagged(query string, args ...any) ([]FlaggedTransaction, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

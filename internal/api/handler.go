@@ -2,6 +2,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net"
@@ -25,19 +26,52 @@ type errorResponse struct {
 
 // Server holds the API's dependencies.
 type Server struct {
-	store *db.Store
+	store  *db.Store
+	apiKey string
 }
 
-// NewServer returns a Server backed by the given store.
-func NewServer(store *db.Store) *Server {
-	return &Server{store: store}
+// NewServer returns a Server backed by the given store. Every request must
+// present apiKey in the X-API-Key header.
+func NewServer(store *db.Store, apiKey string) *Server {
+	return &Server{store: store, apiKey: apiKey}
 }
 
-// Routes returns the HTTP handler with all API routes registered.
+// Routes returns the HTTP handler with all API routes registered. cors wraps
+// auth so OPTIONS preflight requests succeed without a key — browsers don't
+// send custom headers on preflight.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/verify", s.handleVerify)
-	return mux
+	mux.HandleFunc("GET /api/flagged", s.handleFlagged)
+	return cors(s.auth(mux))
+}
+
+// cors allows the local dashboard (localhost:3000) to call the API from the
+// browser, including preflight requests.
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// auth rejects requests whose X-API-Key header doesn't match the configured
+// key. The comparison is constant-time to avoid leaking the key by timing.
+func (s *Server) auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("X-API-Key")
+		if subtle.ConstantTimeCompare([]byte(key), []byte(s.apiKey)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing or invalid API key"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +124,19 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleFlagged(w http.ResponseWriter, r *http.Request) {
+	flagged, err := s.store.RecentFlaggedTransactions(20)
+	if err != nil {
+		log.Printf("flagged: %v", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
+		return
+	}
+	if flagged == nil {
+		flagged = []db.FlaggedTransaction{} // serialize as [] rather than null
+	}
+	writeJSON(w, http.StatusOK, flagged)
 }
 
 func validate(req VerifyRequest) string {
