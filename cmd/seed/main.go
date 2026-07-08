@@ -3,8 +3,8 @@
 package main
 
 import (
-	"flag"
 	"log"
+	"os"
 
 	"securepay-verify/internal/db"
 	"securepay-verify/internal/rules"
@@ -26,12 +26,20 @@ var seedUsers = []seedUser{
 }
 
 func main() {
-	dbPath := flag.String("db", "securepay.db", "path to SQLite database")
-	flag.Parse()
+	dbURL := os.Getenv("TURSO_DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("TURSO_DATABASE_URL is not set. Create a database with `turso db create securepay-verify`, " +
+			"then export the URL from `turso db show securepay-verify --url`.")
+	}
+	authToken := os.Getenv("TURSO_AUTH_TOKEN")
+	if authToken == "" {
+		log.Fatal("TURSO_AUTH_TOKEN is not set. Generate one with `turso db tokens create securepay-verify` " +
+			"and export it before seeding.")
+	}
 
-	store, err := db.Open(*dbPath)
+	store, err := db.Open(dbURL, authToken)
 	if err != nil {
-		log.Fatalf("open database %s: %v", *dbPath, err)
+		log.Fatalf("open database %s: %v", dbURL, err)
 	}
 	defer store.Close()
 
@@ -44,5 +52,5 @@ func main() {
 		}
 		log.Printf("seeded %s (%s): %d transactions, device %s", u.userID, country, len(u.amounts), u.fingerprint)
 	}
-	log.Printf("done: %d users seeded into %s", len(seedUsers), *dbPath)
+	log.Printf("done: %d users seeded into %s", len(seedUsers), dbURL)
 }

@@ -11,6 +11,10 @@ import (
 
 	"securepay-verify/internal/db"
 	"securepay-verify/internal/rules"
+
+	// Tests use a temporary local SQLite file instead of Turso so they run
+	// offline without credentials; see db.OpenLocal.
+	_ "modernc.org/sqlite"
 )
 
 const testAPIKey = "test-api-key-123"
@@ -20,7 +24,7 @@ const testAPIKey = "test-api-key-123"
 // Requests must authenticate with testAPIKey.
 func newTestServer(t *testing.T) (*httptest.Server, *db.Store) {
 	t.Helper()
-	store, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	store, err := db.OpenLocal("sqlite", filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}

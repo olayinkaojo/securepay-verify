@@ -1,19 +1,51 @@
 package db
 
 import (
+	"database/sql"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	// Tests run against a temporary local SQLite file so `go test ./...`
+	// stays fast and offline — no Turso credentials required. The queries
+	// and schema are dialect-compatible with libSQL, which is what
+	// production uses via Open.
+	_ "modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	store, err := OpenLocal("sqlite", filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	return store
+}
+
+func TestApplySchemaRetriesThenGivesUp(t *testing.T) {
+	conn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	conn.Close() // every Exec now fails, forcing all retries to burn down
+
+	start := time.Now()
+	err = applySchema(conn)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("applySchema on closed conn should fail")
+	}
+	if !strings.Contains(err.Error(), "giving up after 4 attempts") {
+		t.Errorf("error = %q, want mention of giving up after 4 attempts", err)
+	}
+	// Backoff waits are 200+400+800ms between the 4 attempts.
+	if min := 1400 * time.Millisecond; elapsed < min {
+		t.Errorf("elapsed = %v, want >= %v (backoff waits skipped?)", elapsed, min)
+	}
 }
 
 func TestRecordTransactionUpdatesBaseline(t *testing.T) {

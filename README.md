@@ -15,25 +15,37 @@ internal/rules/  scoring rules engine + stub GeoIP lookup
 dashboard/       Next.js demo dashboard (form + flagged-transactions table)
 ```
 
-Storage is SQLite via `modernc.org/sqlite` (pure Go — no CGO required).
+Storage is [Turso](https://turso.tech) (libSQL) via
+`github.com/tursodatabase/libsql-client-go` (pure Go — no CGO required), so
+data persists in Turso's cloud independently of wherever the Go API is
+deployed. Tests run against a temporary local SQLite file and need no Turso
+credentials.
 
 ## Running it
 
-Requires Go 1.22+.
+Requires Go 1.22+ and a Turso database.
 
 ```sh
-# 1. Seed the database (creates securepay.db with 5 mock users)
+# 1. One-time Turso setup (see .env.example for the same steps)
+brew install tursodatabase/tap/turso
+turso auth signup                          # or: turso auth login
+turso db create securepay-verify
+export TURSO_DATABASE_URL=$(turso db show securepay-verify --url)
+export TURSO_AUTH_TOKEN=$(turso db tokens create securepay-verify)
+
+# 2. Seed the database with 5 mock users
 go run ./cmd/seed
 
-# 2. Set the API key (see .env.example) — the server refuses to start without it
+# 3. Set the API key (see .env.example) — the server refuses to start without it
 export SECUREPAY_API_KEY=$(openssl rand -hex 32)
 
-# 3. Start the API on :8080
+# 4. Start the API on :8080
 go run ./cmd/server
 ```
 
-Flags: both commands accept `-db <path>` (default `securepay.db`); the server
-also accepts `-addr` (default `:8080`).
+The server accepts an `-addr` flag (default `:8080`). To reset demo data,
+drop and recreate the Turso database (`turso db destroy securepay-verify`,
+then repeat the setup), or delete rows directly with `turso db shell`.
 
 ### Authentication
 
@@ -205,5 +217,5 @@ repeat them — the flagged device/location/amount never becomes part of the
 user's history (the attempts land in `flagged_transactions` for audit
 instead). An allowed transaction *does* record: e.g. a new device on a
 clean transaction scores 30 (`allow`) the first time and 0 the next, because
-the device joined the baseline. Re-run `go run ./cmd/seed` on a fresh
-database (`rm securepay.db`) to reset.
+the device joined the baseline. To reset, recreate the Turso database and
+re-run `go run ./cmd/seed` (see "Running it").
