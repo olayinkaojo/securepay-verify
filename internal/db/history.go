@@ -1,0 +1,83 @@
+package db
+
+import "database/sql"
+
+// UserHistory is the historical baseline used by the rules engine.
+type UserHistory struct {
+	Known         bool    // user has been seen before
+	LastCountry   string  // last known country, "" if unknown
+	KnownDevice   bool    // the presented fingerprint has been seen for this user
+	AvgAmount     float64 // average historical transaction amount
+	HasTxnHistory bool    // user has at least one recorded transaction
+}
+
+// GetUserHistory loads everything the rules engine needs about a user in one call.
+func (s *Store) GetUserHistory(userID, fingerprint string) (UserHistory, error) {
+	var h UserHistory
+
+	err := s.db.QueryRow(`SELECT last_country FROM users WHERE user_id = ?`, userID).
+		Scan(&h.LastCountry)
+	switch {
+	case err == sql.ErrNoRows:
+		return h, nil // unknown user: everything zero-valued
+	case err != nil:
+		return h, err
+	}
+	h.Known = true
+
+	err = s.db.QueryRow(
+		`SELECT COUNT(*) > 0 FROM devices WHERE user_id = ? AND fingerprint = ?`,
+		userID, fingerprint,
+	).Scan(&h.KnownDevice)
+	if err != nil {
+		return h, err
+	}
+
+	var avg sql.NullFloat64
+	err = s.db.QueryRow(`SELECT AVG(amount) FROM transactions WHERE user_id = ?`, userID).
+		Scan(&avg)
+	if err != nil {
+		return h, err
+	}
+	h.AvgAmount = avg.Float64
+	h.HasTxnHistory = avg.Valid
+
+	return h, nil
+}
+
+// RecordTransaction persists a verified transaction and updates the user's
+// device list and last known country so future verifications compare against it.
+// An empty country leaves the user's last known country unchanged.
+func (s *Store) RecordTransaction(userID, ipAddress, country, fingerprint string, amount float64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`INSERT INTO users (user_id, last_country) VALUES (?, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET
+		   last_country = CASE WHEN excluded.last_country != '' THEN excluded.last_country ELSE last_country END`,
+		userID, country,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(
+		`INSERT OR IGNORE INTO devices (user_id, fingerprint) VALUES (?, ?)`,
+		userID, fingerprint,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO transactions (user_id, ip_address, country, device_fingerprint, amount)
+		 VALUES (?, ?, ?, ?, ?)`,
+		userID, ipAddress, country, fingerprint, amount,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
