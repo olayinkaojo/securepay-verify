@@ -58,8 +58,12 @@ Response:
 }
 ```
 
-Every verification is recorded into the user's history, so baselines evolve
-over time (a "new" device is only new once).
+Only **allowed** verifications are recorded into the user's history, so the
+baseline evolves from trusted activity only. Verifications that come back
+`review` or `block` are persisted to a separate `flagged_transactions` audit
+table (with their recommendation and flags) that never feeds the rules
+engine — a fraudster can't launder a risky device or location into the
+baseline by repeating the attempt.
 
 ### Rules (v1)
 
@@ -129,6 +133,11 @@ curl -s -X POST localhost:8080/api/verify \
 # {"risk_score":40,"flags":["location_mismatch"],"recommendation":"review"}
 ```
 
-Note: each call records history, so repeating the "new device" examples will
-score lower the second time — the device is known after the first call.
-Re-run `go run ./cmd/seed` on a fresh database (`rm securepay.db`) to reset.
+Note: only `allow` outcomes update the user's baseline. The `review` and
+`block` examples above return the same result no matter how many times you
+repeat them — the flagged device/location/amount never becomes part of the
+user's history (the attempts land in `flagged_transactions` for audit
+instead). An allowed transaction *does* record: e.g. a new device on a
+clean transaction scores 30 (`allow`) the first time and 0 the next, because
+the device joined the baseline. Re-run `go run ./cmd/seed` on a fresh
+database (`rm securepay.db`) to reset.

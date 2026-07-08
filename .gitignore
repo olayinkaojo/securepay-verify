@@ -1,2 +1,5 @@
 *.db
 /bin/
+
+*.env
+.env.local

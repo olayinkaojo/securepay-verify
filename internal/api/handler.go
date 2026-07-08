@@ -69,12 +69,22 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		HasTxnHistory: history.HasTxnHistory,
 	})
 
-	// Record every verification (regardless of outcome) so the user's
-	// baseline evolves. v2 could restrict this to allowed transactions.
-	if err := s.store.RecordTransaction(
-		req.UserID, req.IPAddress, ipCountry, req.DeviceFingerprint, req.TransactionAmount,
-	); err != nil {
-		log.Printf("verify: record transaction for %s: %v", req.UserID, err)
+	// Only allowed transactions update the user's baseline (devices,
+	// last_country, average amount); review/block attempts go to a separate
+	// audit table so a fraudster can't launder a risky device or location
+	// into the baseline by repeating the attempt.
+	if result.Recommendation == "allow" {
+		err = s.store.RecordTransaction(
+			req.UserID, req.IPAddress, ipCountry, req.DeviceFingerprint, req.TransactionAmount,
+		)
+	} else {
+		err = s.store.RecordFlaggedTransaction(
+			req.UserID, req.IPAddress, ipCountry, req.DeviceFingerprint, req.TransactionAmount,
+			result.Recommendation, result.Flags,
+		)
+	}
+	if err != nil {
+		log.Printf("verify: record %s outcome for %s: %v", result.Recommendation, req.UserID, err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}

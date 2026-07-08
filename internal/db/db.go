@@ -31,6 +31,20 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id);
+
+CREATE TABLE IF NOT EXISTS flagged_transactions (
+	id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id            TEXT NOT NULL,
+	ip_address         TEXT NOT NULL,
+	country            TEXT NOT NULL,
+	device_fingerprint TEXT NOT NULL,
+	amount             REAL NOT NULL,
+	recommendation     TEXT NOT NULL,
+	flags              TEXT NOT NULL,
+	created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_flagged_transactions_user ON flagged_transactions (user_id);
 `
 
 // Store wraps the SQLite connection.

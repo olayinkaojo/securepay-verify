@@ -1,6 +1,10 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+	"encoding/json"
+	"time"
+)
 
 // UserHistory is the historical baseline used by the rules engine.
 type UserHistory struct {
@@ -80,4 +84,62 @@ func (s *Store) RecordTransaction(userID, ipAddress, country, fingerprint string
 	}
 
 	return tx.Commit()
+}
+
+// FlaggedTransaction is a review/block verification kept for audit and
+// investigation. It never feeds the rules engine's baseline.
+type FlaggedTransaction struct {
+	UserID            string
+	IPAddress         string
+	Country           string
+	DeviceFingerprint string
+	Amount            float64
+	Recommendation    string
+	Flags             []string
+	CreatedAt         time.Time
+}
+
+// RecordFlaggedTransaction persists a review/block verification into
+// flagged_transactions only. It deliberately does not touch users or devices,
+// so repeated risky attempts cannot launder a device or location into the
+// user's baseline.
+func (s *Store) RecordFlaggedTransaction(userID, ipAddress, country, fingerprint string, amount float64, recommendation string, flags []string) error {
+	flagsJSON, err := json.Marshal(flags)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO flagged_transactions (user_id, ip_address, country, device_fingerprint, amount, recommendation, flags)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		userID, ipAddress, country, fingerprint, amount, recommendation, string(flagsJSON),
+	)
+	return err
+}
+
+// FlaggedTransactions returns the audit records for a user, oldest first.
+func (s *Store) FlaggedTransactions(userID string) ([]FlaggedTransaction, error) {
+	rows, err := s.db.Query(
+		`SELECT user_id, ip_address, country, device_fingerprint, amount, recommendation, flags, created_at
+		 FROM flagged_transactions WHERE user_id = ? ORDER BY id`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []FlaggedTransaction
+	for rows.Next() {
+		var ft FlaggedTransaction
+		var flagsJSON string
+		if err := rows.Scan(&ft.UserID, &ft.IPAddress, &ft.Country, &ft.DeviceFingerprint,
+			&ft.Amount, &ft.Recommendation, &flagsJSON, &ft.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(flagsJSON), &ft.Flags); err != nil {
+			return nil, err
+		}
+		out = append(out, ft)
+	}
+	return out, rows.Err()
 }
